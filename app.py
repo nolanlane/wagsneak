@@ -7,22 +7,7 @@ from dotenv import load_dotenv
 
 app = Flask(__name__)
 
-# --- Configuration (Load from Environment Variables!) ---
-# These variables MUST be set in your RunPod environment.
-# DO NOT hardcode your API keys or sensitive info directly in this file!
-#
-# Required Environment Variables:
-# WALGREENS_API_KEY: Your Walgreens API Key
-# WALGREENS_AFFILIATE_ID: Your AffiliateID provided by Walgreens
-# APPSHEET_API_KEY: Your AppSheet Application Access Key
-# APPSHEET_APP_ID: Your AppSheet App ID (from its URL or Info tab)
-# APPSHEET_PRODUCT_TABLE_NAME: The exact name of your table in AppSheet
-# WEBHOOK_SECRET: (Optional) A secret string for webhook authentication
-
-# Load variables from .env file ONLY FOR LOCAL TESTING
-# On RunPod, these should be set in the environment directly.
 load_dotenv()
-
 
 WALGREENS_API_KEY = os.environ.get("WALGREENS_API_KEY")
 WALGREENS_AFFILIATE_ID = os.environ.get("WALGREENS_AFFILIATE_ID")
@@ -31,21 +16,9 @@ APPSHEET_APP_ID = os.environ.get("APPSHEET_APP_ID")
 APPSHEET_PRODUCT_TABLE_NAME = os.environ.get("APPSHEET_PRODUCT_TABLE_NAME")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
 
-# Use the Production URL
 APPSHEET_API_BASE_URL = f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}"
 
-
-# --- Helper Function to Update AppSheet ---
 def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
-    """
-    Updates a specific row in the AppSheet table via its API.
-
-    Args:
-        row_id (str): The unique key ('Row ID') of the row to update.
-        quantity (str, optional): The quantity to update. Defaults to None.
-        status (str, optional): The status to update. Defaults to None.
-        error_message (str, optional): The error message to update. Defaults to None.
-    """
     print(f"Attempting to update AppSheet row: {row_id} with Quantity='{quantity}', Status='{status}', Error='{error_message}'")
 
     appsheet_api_url = f"{APPSHEET_API_BASE_URL}/Action"
@@ -67,10 +40,9 @@ def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
 
     # For 'Quantity', often expects a number or string representation of a number.
     if quantity is not None:
-        # Ensure quantity is a string, AppSheet often expects strings
-        appsheet_update_data["Quantity"] = str(quantity) if quantity != '' else '0' # Ensure string, default to '0' if empty/None
+        appsheet_update_data["Quantity"] = str(quantity) if str(quantity) != '' else '0' # Ensure string, default to '0' if empty/None
     else:
-        appsheet_update_data["Quantity"] = '0' # Send '0' if quantity was explicitly None
+        appsheet_update_data["Quantity"] = '0' # Send '0' if input quantity was explicitly None
 
     # For 'Status', typically expects a string.
     if status is not None:
@@ -84,7 +56,7 @@ def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
     else:
         appsheet_update_data["Error"] = '' # Send empty string if error_message was explicitly None
 
-    # Add other columns to update here with similar None checks or default values
+    # Add other columns to update here with similar handling
 
     appsheet_update_body = [appsheet_update_data] # AppSheet API update expects a list of rows
 
@@ -132,9 +104,14 @@ def check_inventory():
             return jsonify({"status": "error", "message": "Invalid JSON"}), 400
 
         row_id = webhook_data.get("appsheet_row_id")
-        product_id_18digit = webhook_data.get("product_id_18digit") # Still need product ID to filter dump
+        product_id_18digit = webhook_data.get("product_id_18digit")
         store_id = webhook_data.get("store_id")
         app_version = webhook_data.get("app_version")
+
+        # --- DEBUG PRINT ---
+        print(f"DEBUG: product_id_18digit RECEIVED from webhook: '{product_id_18digit}', type: {type(product_id_18digit)}")
+        # --- END DEBUG PRINT ---
+
 
         if not row_id or not product_id_18digit or not store_id:
              print("Missing required data in webhook body.")
