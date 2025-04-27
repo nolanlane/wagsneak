@@ -51,8 +51,11 @@ if APPSHEET_API_BASE_URL and APPSHEET_API_KEY and "APPSHEET_KEY_COLUMN_NAME" not
         resp = requests.get(cols_url, headers={"ApplicationAccessKey": APPSHEET_API_KEY}, timeout=30)
         if resp.ok:
             cols = resp.json()
+            # Log available column names for debugging
+            col_names = [c.get("Name") for c in cols if isinstance(c, dict) and c.get("Name")]
+            app.logger.info(f"AppSheet columns: {col_names}")
+            # Detect the key column by flag
             for col in cols:
-                # Column metadata should indicate key column via 'Key' or 'IsKey' flag
                 if col.get("Key") or col.get("IsKey"):
                     APPSHEET_KEY_COLUMN_NAME = col.get("Name")
                     app.logger.info(f"Detected AppSheet key column: {APPSHEET_KEY_COLUMN_NAME}")
