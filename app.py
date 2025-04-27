@@ -158,7 +158,9 @@ def check_inventory():
         product_id_18digit_str = str(product_id_raw).strip() if product_id_raw is not None else None
         store_id = str(store_id_raw).strip() if store_id_raw is not None else None
 
-        app.logger.debug(f"product_id received: {product_id_18digit!r} ({type(product_id_18digit)}), using '{product_id_18digit_str}'")
+        app.logger.debug(
+            f"product_id received raw: {product_id_raw!r} ({type(product_id_raw)}), using trimmed '{product_id_18digit_str}'"
+        )
 
         if not row_id or not product_id_18digit_str or not store_id:
             missing_params = [
