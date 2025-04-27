@@ -32,7 +32,7 @@ APPSHEET_PRODUCT_TABLE_NAME = os.environ.get("APPSHEET_PRODUCT_TABLE_NAME")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
 
 # Use the Production URL
-APPSHEET_API_BASE_URL = f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}"
+APPSHEET_API_BASE_URL = f"[https://api.appsheet.com/api/v2/apps/](https://api.appsheet.com/api/v2/apps/){APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}"
 
 
 # --- Helper Function to Update AppSheet ---
@@ -151,7 +151,7 @@ def check_inventory():
         return jsonify({"status": "error", "message": "Error processing webhook data"}), 400
 
     # --- Call Walgreens API - Method B (Get full inventory dump, then filter) ---
-    walgreens_api_url = "https://services.walgreens.com/api/products/inventory/v4" # Assuming same endpoint
+    walgreens_api_url = "[https://services.walgreens.com/api/products/inventory/v4](https://services.walgreens.com/api/products/inventory/v4)" # Assuming same endpoint
 
     # Payload structure for Method B - does NOT include product ID in request body
     walgreens_payload = {
