@@ -89,7 +89,9 @@ def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
 
     try:
         print(f"Calling AppSheet API to update row {row_id}...")
-        # print(f"AppSheet API Request Body: {json.dumps(appsheet_update_body)}") # Optional: Print request body for debugging
+        # --- DEBUG PRINT URL for AppSheet API ---
+        print(f"DEBUG URL: AppSheet API URL: '{appsheet_api_url}', type: {type(appsheet_api_url)}")
+        # --- END DEBUG PRINT URL ---
 
         appsheet_response = requests.post(
             appsheet_api_url,
@@ -165,6 +167,10 @@ def check_inventory():
 
     try:
         print(f"Calling Walgreens API for store {store_id} at {walgreens_api_url} (Method B)")
+        # --- DEBUG PRINT URL for Walgreens API ---
+        print(f"DEBUG URL: Walgreens API URL: '{walgreens_api_url}', type: {type(walgreens_api_url)}")
+        # --- END DEBUG PRINT URL ---
+
         walgreens_response = requests.post(walgreens_api_url, headers=walgreens_headers, json=walgreens_payload)
         print(f"Walgreens API Status Code: {walgreens_response.status_code}")
 
@@ -186,6 +192,10 @@ def check_inventory():
                  # --- END DEBUG PRINT 2 ---
 
                  for item in walgreens_data:
+                      # --- DEBUG PRINT 4: Inside the loop, showing item ID from dump ---
+                      print(f"DEBUG 4: Checking item ID from dump: '{item.get('id')}', type: {type(item.get('id'))}")
+                      # --- END DEBUG PRINT 4 ---
+
                       # Match item ID ('id') from the dump with the target product_id_18digit
                       # Ensure comparison is type safe (Walgreens might return numbers or strings for 'id')
                       # print(f"DEBUG: Comparing dump item '{item.get('id')}' to target '{product_id_18digit}'") # Optional detailed debug inside loop
@@ -269,25 +279,37 @@ def check_inventory():
 
     except requests.exceptions.RequestException as e:
         print(f"Request error calling Walgreens API: {e}")
+        # Update AppSheet with an error status due to request failure
         update_appsheet_row(
             row_id,
-            quantity='0', # Send a default quantity
             status='Error',
             error_message=f'Walgreens API Request Failed: {e}'
         )
     except Exception as e:
         print(f"Unexpected error during Walgreens API call or processing: {e}")
+        # Update AppSheet with a general error status
         update_appsheet_row(
             row_id,
-            quantity='0', # Send a default quantity
             status='Error',
             error_message=f'Internal App Error: {e}'
         )
 
+
+    # --- Respond to Webhook Sender (AppSheet) ---
+    # AppSheet webhooks expect a 200 OK response to indicate success.
+    # The actual data update happens via the AppSheet API call made above.
     return jsonify({"status": "success", "message": "Inventory check initiated and AppSheet update attempted."}), 200
 
+
+# --- Gunicorn/RunPod Entry Point ---
+# When deploying on RunPod using Gunicorn or a similar server runner,
+# this __name__ == '__main__': block is typically NOT executed.
+# The server runner imports your 'app' instance directly.
+# Keep this block empty for production deployment via Gunicorn/RunPod Endpoint.
 if __name__ == '__main__':
     print("--- Running Flask development server locally ---")
+    # For local testing, you might want to load environment variables from a .env file
+    # if you have python-dotenv installed:
     try:
         from dotenv import load_dotenv
         load_dotenv()
@@ -295,10 +317,8 @@ if __name__ == '__main__':
     except ImportError:
         print("python-dotenv not installed. Please set environment variables manually.")
 
-    required_vars = ["WALGREENS_API_KEY", "WALGREENS_AFFILIATE_ID", "APPSHEET_API_KEY", "APPSHEET_APP_ID", "APPSHEET_PRODUCT_TABLE_NAME"]
-    missing_vars = [var for var in required_vars if os.environ.get(var) is None]
-    if missing_vars:
-        print(f"Warning: Missing required environment variables for local testing: {', '.join(missing_vars)}")
-        print("Please set these in your shell or a .env file.")
+    # Check if required environment variables are set for local testing
+    if not all([WALGREENS_API_KEY, WALGREENS_AFFILIATE_ID, APPSHEET_API_KEY, APPSHEET_APP_ID, APPSHEET_PRODUCT_TABLE_NAME]):
+        print("Warning: Required environment variables not set. Local testing may fail.")
 
     app.run(debug=True, host='0.0.0.0', port=5000)
