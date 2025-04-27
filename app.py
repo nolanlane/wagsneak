@@ -38,7 +38,29 @@ if missing_vars:
     sys.exit(1)
 
 # Define AppSheet base URL (without /Action or /Rows)
-APPSHEET_API_BASE_URL = f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}" if APPSHEET_APP_ID and APPSHEET_PRODUCT_TABLE_NAME else None
+APPSHEET_API_BASE_URL = (
+    f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}"
+    if APPSHEET_APP_ID and APPSHEET_PRODUCT_TABLE_NAME else None
+)
+# --- Auto-detect key column name if not explicitly configured ---
+# Requires AppSheet API URL & Key, and that user did not set APPSHEET_KEY_COLUMN_NAME explicitly
+if APPSHEET_API_BASE_URL and APPSHEET_API_KEY and "APPSHEET_KEY_COLUMN_NAME" not in os.environ:
+    try:
+        cols_url = f"{APPSHEET_API_BASE_URL}/Columns"
+        app.logger.info(f"Retrieving AppSheet columns metadata to detect key column from {cols_url}")
+        resp = requests.get(cols_url, headers={"ApplicationAccessKey": APPSHEET_API_KEY}, timeout=30)
+        if resp.ok:
+            cols = resp.json()
+            for col in cols:
+                # Column metadata should indicate key column via 'Key' or 'IsKey' flag
+                if col.get("Key") or col.get("IsKey"):
+                    APPSHEET_KEY_COLUMN_NAME = col.get("Name")
+                    app.logger.info(f"Detected AppSheet key column: {APPSHEET_KEY_COLUMN_NAME}")
+                    break
+        else:
+            app.logger.warning(f"Could not fetch AppSheet columns metadata: HTTP {resp.status_code}")
+    except Exception:
+        app.logger.exception("Failed to auto-detect AppSheet key column")
 
 
 # --- Helper Function to Update AppSheet ---
@@ -116,8 +138,18 @@ def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
 
         if 200 <= appsheet_response.status_code < 300:
             app.logger.info(f"AppSheet update initiated for row {row_id}")
+        elif appsheet_response.status_code == 404:
+            app.logger.error(
+                f"AppSheet row not found (404). Ensure key column '{APPSHEET_KEY_COLUMN_NAME}' has value '{row_id}' in the table."
+            )
+            try:
+                app.logger.error(f"AppSheet API error body: {appsheet_response.text}")
+            except Exception as e:
+                app.logger.error(f"Could not read AppSheet error response body: {e}")
         else:
-            app.logger.error(f"AppSheet API error for row {row_id}: {appsheet_response.status_code} {appsheet_response.reason}")
+            app.logger.error(
+                f"AppSheet API error for row {row_id}: {appsheet_response.status_code} {appsheet_response.reason}"
+            )
             try:
                 app.logger.error(f"AppSheet API error body: {appsheet_response.text}")
             except Exception as e:
