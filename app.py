@@ -172,8 +172,14 @@ def check_inventory():
         store_id_raw = webhook_data.get("store_id")
         app_version = webhook_data.get("app_version", "1.0")
 
-        # Normalize to trimmed strings for consistent use
-        row_id = str(row_id_raw).strip() if row_id_raw is not None else None
+        # Normalize row_id preserving numeric types or trimming strings
+        if row_id_raw is None:
+            row_id = None
+        elif isinstance(row_id_raw, str):
+            row_id = row_id_raw.strip()
+        else:
+            row_id = row_id_raw
+        # Convert product_id and store_id to trimmed strings
         product_id_18digit_str = str(product_id_raw).strip() if product_id_raw is not None else None
         store_id = str(store_id_raw).strip() if store_id_raw is not None else None
 
