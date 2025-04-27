@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Assuming app.py is in the root of your repo.
 COPY app.py .
 
-# Expose the port your application will listen on.
-EXPOSE 80
+# Expose the port your application will listen on (matches Flask's default port).
+EXPOSE 5000
 
 # No CMD or ENTRYPOINT needed here, as the RunPod UI's "Container Start Command" overrides this.
 # Including CMD ["true"] or similar is sometimes done to make the Dockerfile technically executable,
