@@ -1,16 +1,12 @@
 from flask import Flask, request, jsonify
 import requests
 import os
-import datetime
-import json
-from dotenv import load_dotenv
+import json # Import json for potential debugging output
 
 app = Flask(__name__)
 
-# --- Configuration (Load from Environment Variables!) ---
+# --- Configuration (Load from Environment Variables) ---
 # These variables MUST be set in your RunPod environment.
-# DO NOT hardcode your API keys or sensitive info directly in this file!
-#
 # Required Environment Variables:
 # WALGREENS_API_KEY: Your Walgreens API Key
 # WALGREENS_AFFILIATE_ID: Your AffiliateID provided by Walgreens
@@ -19,11 +15,6 @@ app = Flask(__name__)
 # APPSHEET_PRODUCT_TABLE_NAME: The exact name of your table in AppSheet
 # WEBHOOK_SECRET: (Optional) A secret string for webhook authentication
 
-# Load variables from .env file ONLY FOR LOCAL TESTING
-# On RunPod, these should be set in the environment directly.
-load_dotenv()
-
-
 WALGREENS_API_KEY = os.environ.get("WALGREENS_API_KEY")
 WALGREENS_AFFILIATE_ID = os.environ.get("WALGREENS_AFFILIATE_ID")
 APPSHEET_API_KEY = os.environ.get("APPSHEET_API_KEY")
@@ -31,94 +22,117 @@ APPSHEET_APP_ID = os.environ.get("APPSHEET_APP_ID")
 APPSHEET_PRODUCT_TABLE_NAME = os.environ.get("APPSHEET_PRODUCT_TABLE_NAME")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
 
-# Use the Production URL
-APPSHEET_API_BASE_URL = f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}"
+# --- Validate Required Environment Variables ---
+required_vars = ["WALGREENS_API_KEY", "WALGREENS_AFFILIATE_ID", "APPSHEET_API_KEY", "APPSHEET_APP_ID", "APPSHEET_PRODUCT_TABLE_NAME"]
+missing_vars = [var for var in required_vars if not os.environ.get(var)]
+if missing_vars:
+    # Log missing variables prominently - consider raising an error or exiting
+    print(f"CRITICAL ERROR: Missing required environment variables: {', '.join(missing_vars)}")
+    # Depending on deployment strategy, you might want to exit here
+    # import sys
+    # sys.exit(1)
+
+# Define AppSheet base URL (without /Action or /Rows)
+APPSHEET_API_BASE_URL = f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}" if APPSHEET_APP_ID and APPSHEET_PRODUCT_TABLE_NAME else None
 
 
 # --- Helper Function to Update AppSheet ---
 def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
-    """
-    Updates a specific row in the AppSheet table via its API.
+    \"\"\"
+    Updates a specific row in the AppSheet table via its API using the /Rows endpoint.
 
     Args:
-        row_id (str): The unique key ('Row ID') of the row to update.
+        row_id (str): The unique key of the row to update (must match AppSheet key column name).
         quantity (str, optional): The quantity to update. Defaults to None.
         status (str, optional): The status to update. Defaults to None.
         error_message (str, optional): The error message to update. Defaults to None.
-    """
+    \"\"\"
+    # Ensure API base URL is configured before proceeding
+    if not APPSHEET_API_BASE_URL or not APPSHEET_API_KEY:
+        print("Error: AppSheet API URL or Key not configured due to missing environment variables.")
+        return # Cannot proceed without config
+
     print(f"Attempting to update AppSheet row: {row_id} with Quantity='{quantity}', Status='{status}', Error='{error_message}'")
 
-    appsheet_api_url = f"{APPSHEET_API_BASE_URL}/Action"
+    appsheet_api_url = f"{APPSHEET_API_BASE_URL}/Rows" # Use the /Rows endpoint
 
     headers = {
         "Content-Type": "application/json",
         "ApplicationAccessKey": APPSHEET_API_KEY
     }
 
-    # Construct the JSON body for the AppSheet API update call
-    # Handle None values: Convert None to empty string or a default value for AppSheet
-    # to avoid AppSheet API 'data is missing' errors.
-    appsheet_update_data = {
-        "Row ID": row_id # Use "Row ID" as the key name, required for update
+    # Construct the row data with the key column first
+    # *** IMPORTANT: Verify "Row ID" is the EXACT key column name in AppSheet ***
+    # If your key column is different (e.g., "ID"), change "Row ID" below.
+    row_data_to_update = {
+        "Row ID": row_id
     }
 
-    # Explicitly add fields only if they are not None, or convert None to a suitable default.
-    # This prevents sending 'null' if AppSheet doesn't like it for certain column types.
-
-    # For 'Quantity', often expects a number or string representation of a number.
+    # Add other columns to update, converting None to appropriate defaults
     if quantity is not None:
-        appsheet_update_data["Quantity"] = str(quantity) if str(quantity) != '' else '0' # Ensure string, default to '0' if empty/None
+        # Ensure quantity is a string; default empty/None to '0'
+        row_data_to_update["Quantity"] = str(quantity) if str(quantity) else '0'
     else:
-        appsheet_update_data["Quantity"] = '0' # Send '0' if input quantity was explicitly None
+        row_data_to_update["Quantity"] = '0' # Default if None
 
-    # For 'Status', typically expects a string.
     if status is not None:
-        appsheet_update_data["Status"] = str(status)
+        row_data_to_update["Status"] = str(status)
     else:
-        appsheet_update_data["Status"] = '' # Send empty string if status was explicitly None
+        row_data_to_update["Status"] = '' # Default to empty string if None
 
-    # For 'Error', typically expects a string.
     if error_message is not None:
-        appsheet_update_data["Error"] = str(error_message)
+        # Limit error message length if necessary for AppSheet column
+        error_str = str(error_message)
+        max_len = 250 # Example max length, adjust if needed
+        row_data_to_update["Error"] = error_str[:max_len] if len(error_str) > max_len else error_str
     else:
-        appsheet_update_data["Error"] = '' # Send empty string if error_message was explicitly None
+        row_data_to_update["Error"] = '' # Default to empty string if None
 
-    # Add other columns to update here with similar handling
-
-    appsheet_update_body = [appsheet_update_data] # AppSheet API update expects a list of rows
+    # Construct the final payload for the /Rows "Edit" action
+    appsheet_payload = {
+        "Action": "Edit",
+        "Properties": {
+            "Locale": "en-US", # Example: Specify locale if needed
+            # "Timezone": "America/New_York", # Example: Specify timezone if needed
+        },
+        "Rows": [row_data_to_update] # Pass the row data in a list under "Rows"
+    }
 
     try:
-        print(f"DEBUG REPR URL: AppSheet API URL: {repr(appsheet_api_url)}") # New debug print
-        print(f"Calling AppSheet API to update row {row_id}...")
-        # print(f"AppSheet API Request Body: {json.dumps(appsheet_update_body)}") # Optional: Print request body for debugging
+        print(f"Calling AppSheet API (Edit Row Action) at {appsheet_api_url}...")
+        # print(f"AppSheet API Request Body: {json.dumps(appsheet_payload)}") # Uncomment to debug payload
 
-
-        appsheet_response = requests.post(
+        appsheet_response = requests.post( # POST method is correct for /Rows endpoint actions
             appsheet_api_url,
             headers=headers,
-            json=appsheet_update_body # Use json= for automatic encoding
+            json=appsheet_payload,
+            timeout=30 # Add a timeout to prevent hanging indefinitely
         )
 
         print(f"AppSheet API Status Code: {appsheet_response.status_code}")
 
-        if appsheet_response.status_code >= 200 and appsheet_response.status_code < 300:
-            print(f"Successfully updated AppSheet row {row_id}.")
+        if 200 <= appsheet_response.status_code < 300:
+             # Consider checking response body for specific success indicators if API provides them
+             print(f"Successfully initiated update for AppSheet row {row_id}.")
         else:
-            print(f"Error calling AppSheet API for row {row_id}: {appsheet_response.status_code} {appsheet_response.reason} for url: {appsheet_api_url}")
-            try:
-                 print(f"AppSheet API error response body: {appsheet_response.text}")
-            except:
-                 pass
+             print(f"Error calling AppSheet API for row {row_id}: {appsheet_response.status_code} {appsheet_response.reason}")
+             try:
+                   # Log the error response body for debugging
+                   print(f"AppSheet API error response body: {appsheet_response.text}")
+             except Exception as e:
+                   print(f"Could not read AppSheet error response body: {e}")
 
+    except requests.exceptions.Timeout:
+        print(f"Request timed out calling AppSheet API for row {row_id}")
     except requests.exceptions.RequestException as e:
         print(f"Request error calling AppSheet API for row {row_id}: {e}")
     except Exception as e:
         print(f"Unexpected error during AppSheet API update attempt for row {row_id}: {e}")
 
+
 @app.route('/check_walgreens_inventory', methods=['POST'])
 def check_inventory():
     # --- Webhook Authentication (Optional) ---
-    # If you set a WEBHOOK_SECRET environment variable, validate the header.
     if WEBHOOK_SECRET:
         incoming_secret = request.headers.get("X-Custom-Secret")
         if incoming_secret != WEBHOOK_SECRET:
@@ -132,181 +146,199 @@ def check_inventory():
             print("Received empty or invalid JSON body.")
             return jsonify({"status": "error", "message": "Invalid JSON"}), 400
 
+        # Use .get with default=None to safely access keys
         row_id = webhook_data.get("appsheet_row_id")
         product_id_18digit = webhook_data.get("product_id_18digit")
         store_id = webhook_data.get("store_id")
-        app_version = webhook_data.get("app_version")
+        app_version = webhook_data.get("app_version", "1.0") # Provide a default app version if needed
 
-        # --- DEBUG PRINT 1: Immediately after reading webhook data ---
-        print(f"DEBUG 1: product_id_18digit RECEIVED from webhook: '{product_id_18digit}', type: {type(product_id_18digit)}")
-        # --- END DEBUG PRINT 1 ---
+        # Convert product_id to string immediately for consistent comparisons
+        product_id_18digit_str = str(product_id_18digit) if product_id_18digit is not None else None
 
+        print(f"DEBUG: product_id received: '{product_id_18digit}', type: {type(product_id_18digit)}. Using string: '{product_id_18digit_str}'")
 
-        if not row_id or not product_id_18digit or not store_id:
-             print("Missing required data in webhook body.")
-             return jsonify({"status": "error", "message": "Missing required data (appsheet_row_id, product_id_18digit, or store_id)"}), 400
+        if not row_id or not product_id_18digit_str or not store_id:
+             missing_params = [
+                 p for p, v in
+                 {
+                     "appsheet_row_id": row_id,
+                     "product_id_18digit": product_id_18digit_str,
+                     "store_id": store_id
+                 }.items() if not v
+             ]
+             print(f"Missing required data in webhook body: {', '.join(missing_params)}")
+             return jsonify({"status": "error", "message": f"Missing required data: {', '.join(missing_params)}"}), 400
 
-        print(f"Webhook received. Target Product ID: {product_id_18digit}, Store ID: {store_id}, AppSheet Row ID: {row_id}")
+        print(f"Webhook received. Target Product ID: {product_id_18digit_str}, Store ID: {store_id}, AppSheet Row ID: {row_id}")
 
     except Exception as e:
         print(f"Error parsing incoming webhook data: {e}")
         return jsonify({"status": "error", "message": "Error processing webhook data"}), 400
 
-    # --- Call Walgreens API - Method B (Get full inventory dump, then filter) ---
-    walgreens_api_url = "https://services.walgreens.com/api/products/inventory/v4" # Assuming same endpoint
+    # --- Check if Walgreens API Credentials are Set ---
+    if not WALGREENS_API_KEY or not WALGREENS_AFFILIATE_ID:
+        print("Error: Walgreens API Key or Affiliate ID not configured.")
+        # Update AppSheet with configuration error status
+        update_appsheet_row(
+            row_id,
+            quantity='0',
+            status='Error',
+            error_message='Walgreens API credentials missing in server configuration.'
+        )
+        return jsonify({"status": "error", "message": "Walgreens API credentials not configured"}), 500
 
-    # Payload structure for Method B - does NOT include product ID in request body
+    # --- Call Walgreens API - Method B (Get full inventory dump, then filter) ---
+    walgreens_api_url = "https://services.walgreens.com/api/products/inventory/v4"
+
     walgreens_payload = {
          "apiKey": WALGREENS_API_KEY,
          "affid": WALGREENS_AFFILIATE_ID,
          "store": store_id,
-         "appVer": app_version # Include appVer as per snippet
-         # Do NOT include product ID here
+         "appVer": app_version
     }
     walgreens_headers = {"Content-Type": "application/json"}
 
     try:
-        print(f"DEBUG REPR URL: Walgreens API URL: {repr(walgreens_api_url)}") # New debug print
-        print(f"Calling Walgreens API for store {store_id} at {walgreens_api_url} (Method B)")
-        walgreens_response = requests.post(walgreens_api_url, headers=walgreens_headers, json=walgreens_payload)
+        print(f"Calling Walgreens API for store {store_id} at {walgreens_api_url}")
+        walgreens_response = requests.post(
+            walgreens_api_url,
+            headers=walgreens_headers,
+            json=walgreens_payload,
+            timeout=30 # Add a timeout
+        )
         print(f"Walgreens API Status Code: {walgreens_response.status_code}")
 
         if walgreens_response.status_code == 200:
-            walgreens_data = walgreens_response.json()
-            # --- Process Walgreens Response - Filter the dump ---
-            # Expected dump structure: list of dictionaries, each with keys 'id', 'q', 'ut', 'st'
-            inventory_status = "Unknown"
-            quantity_available = None
-            error_from_walgreens = None
+            try:
+                walgreens_data = walgreens_response.json()
+                # --- Process Walgreens Response - Filter the dump ---
+                quantity_for_appsheet = '0'
+                inventory_for_appsheet = 'Not Found' # Default status if item not in dump
+                error_for_appsheet = None
+                found_item = False
 
-            found_item = False
-            # Check if the response data is a list and contains inventory items
-            if isinstance(walgreens_data, list):
-                 print(f"Received inventory dump with {len(walgreens_data)} items.")
+                if isinstance(walgreens_data, list):
+                     print(f"Received inventory dump with {len(walgreens_data)} items.")
+                     for item in walgreens_data:
+                          # Compare item ID from dump (as string) with target product ID (already string)
+                          if str(item.get('id')) == product_id_18digit_str:
+                               print(f"Found item {product_id_18digit_str} in Walgreens inventory dump.")
+                               found_item = True
+                               quantity_available = item.get('q') # Extract quantity ('q')
 
-                 # --- DEBUG PRINT 2: Before iterating through dump ---
-                 print(f"DEBUG 2: product_id_18digit before iterating dump: '{product_id_18digit}', type: {type(product_id_18digit)}")
-                 # --- END DEBUG PRINT 2 ---
+                               # Determine status and quantity string for AppSheet
+                               if quantity_available is not None:
+                                   try:
+                                       if int(quantity_available) > 0:
+                                           inventory_for_appsheet = 'In Stock'
+                                           quantity_for_appsheet = str(quantity_available)
+                                       else:
+                                           inventory_for_appsheet = 'Out of Stock'
+                                           quantity_for_appsheet = '0'
+                                   except (ValueError, TypeError):
+                                        print(f"Warning: Could not parse quantity '{quantity_available}' as integer for item {product_id_18digit_str}. Setting status to Unknown.")
+                                        inventory_for_appsheet = 'Unknown Qty' # Or some other status
+                                        quantity_for_appsheet = str(quantity_available) # Keep original string if not parseable int
+                               else:
+                                   inventory_for_appsheet = 'Out of Stock' # Treat null quantity as OOS
+                                   quantity_for_appsheet = '0'
 
-                 for item in walgreens_data:
-                      # --- DEBUG PRINT 4: Inside the loop, showing item ID from dump ---
-                      # Removed DEBUG 4 for now to focus on connection error
-                      # print(f"DEBUG 4: Checking item ID from dump: '{item.get('id')}', type: {type(item.get('id'))}")
-                      # --- END DEBUG 4 ---
+                               break # Exit loop once the target product is found
 
-                      # Match item ID ('id') from the dump with the target product_id_18digit
-                      # Ensure comparison is type safe (Walgreens might return numbers or strings for 'id')
-                      # print(f"DEBUG: Comparing dump item '{item.get('id')}' to target '{product_id_18digit}'") # Optional detailed debug inside loop
+                     # Update AppSheet based on whether the item was found and its status
+                     if found_item:
+                         update_appsheet_row(
+                             row_id,
+                             quantity=quantity_for_appsheet,
+                             status=inventory_for_appsheet,
+                             error_message=None # Clear any previous error if found
+                         )
+                     else:
+                         print(f"Target item {product_id_18digit_str} not found in Walgreens inventory dump.")
+                         update_appsheet_row(
+                              row_id,
+                              quantity='0',
+                              status='Not Found',
+                              error_message=f"Item {product_id_18digit_str} not in dump."
+                         )
 
-                      if str(item.get('id')) == str(product_id_18digit): # <-- Uses product_id_18digit here
-                           print(f"Found item {product_id_18digit} in Walgreens inventory dump.")
-                           found_item = True
-                           # Extract quantity ('q') and potentially status from the item data
-                           quantity_available = item.get('q')
-                           # You might need to derive status from quantity or another key if available in dump
-                           # For simplicity, let's base status on quantity here
-                           if quantity_available is not None and int(quantity_available) > 0:
-                                inventory_for_appsheet = 'In Stock'
-                           else:
-                                inventory_for_appsheet = 'Out of Stock' # Assume Out of Stock if quantity is 0 or None
+                # Handle cases where Walgreens API returns non-list data (e.g., error object)
+                elif isinstance(walgreens_data, dict) and 'error' in walgreens_data:
+                     error_detail = walgreens_data.get('error', 'Unknown Walgreens error')
+                     print(f"Walgreens API returned an error object: {error_detail}")
+                     update_appsheet_row(
+                          row_id, quantity='0', status='Error',
+                          error_message=f"Walgreens API Error: {error_detail}"
+                     )
+                else:
+                     print("Walgreens API returned data in an unexpected format (not a list).")
+                     update_appsheet_row(
+                          row_id, quantity='0', status='Error',
+                          error_message="Walgreens API returned unexpected data format."
+                     )
 
-                           # Format quantity for AppSheet
-                           quantity_for_appsheet = str(quantity_available) if quantity_available is not None else '0'
-
-                           update_appsheet_row(
-                                row_id,
-                                quantity=quantity_for_appsheet,
-                                status=inventory_for_appsheet,
-                                # No specific item error available in dump structure described,
-                                # so pass None or a default here if needed.
-                                error_message=None
-                           )
-                           break # Exit loop once the target product is found
-
-            # --- DEBUG PRINT 3: Inside the "not found" block ---
-            if not found_item: # <-- This block is executed if item not found OR if product_id_18digit is truncated
-                 print(f"DEBUG 3: product_id_18digit inside not found block: '{product_id_18digit}', type: {type(product_id_18digit)}")
-                 # --- END DEBUG PRINT 3 ---
-
-                 print(f"Target item {product_id_18digit} not found in Walgreens inventory dump.") # <-- Uses product_id_18digit here
-                 update_appsheet_row(
-                      row_id,
-                      quantity='0',
-                      status='Not Found',
-                      error_message=f"Item {product_id_18digit} not in Walgreens dump." # <-- Uses product_id_18digit here
-                 )
-
-            # If walgreens_data is not a list, it might be an error response from Walgreens structured differently
-            elif isinstance(walgreens_data, dict) and 'error' in walgreens_data:
-                 print(f"Walgreens API returned an error in the response body: {walgreens_data.get('error')}")
-                 update_appsheet_row(
-                      row_id,
-                      quantity='0',
-                      status='Error',
-                      error_message=f"Walgreens API Error in response: {walgreens_data.get('error')}"
-                 )
-            else:
-                 print(f"Walgreens API returned data in unexpected format.")
-                 update_appsheet_row(
-                      row_id,
-                      quantity='0',
-                      status='Error',
-                      error_message=f"Walgreens API returned unexpected data format."
-                 )
-
+            except json.JSONDecodeError:
+                print("Error decoding JSON response from Walgreens API.")
+                update_appsheet_row(
+                    row_id, quantity='0', status='Error',
+                    error_message='Failed to decode Walgreens API response.'
+                )
+            except Exception as e:
+                print(f"Error processing Walgreens response: {e}")
+                update_appsheet_row(
+                    row_id, quantity='0', status='Error',
+                    error_message=f'Error processing Walgreens data: {e}'
+                )
 
         else:
-            # Handle Walgreens API non-200 status codes (like 401, 404, 500)
-            print(f"Walgreens API returned non-200 status code: {walgreens_response.status_code}")
+            # Handle Walgreens API non-200 status codes
+            print(f"Walgreens API returned non-200 status: {walgreens_response.status_code}")
             error_details = f'Walgreens API Error: {walgreens_response.status_code}'
             try:
+                # Try to get more details from the response body
                 walgreens_error_body = walgreens_response.text
                 if walgreens_error_body:
-                     # Limit error message length for AppSheet column
-                     error_details += f" - Details: {walgreens_error_body[:200]}"
-            except:
-                pass
+                     error_details += f" - Details: {walgreens_error_body[:200]}" # Limit length
+            except Exception:
+                pass # Ignore errors reading the error body
 
             update_appsheet_row(
-                row_id,
-                quantity='0', # Send a default quantity like '0' in error case
-                status='Error', # Set status to Error
-                error_message=error_details # Pass combined error details
+                row_id, quantity='0', status='Error', error_message=error_details
             )
 
-
+    except requests.exceptions.Timeout:
+        print(f"Request timed out calling Walgreens API.")
+        update_appsheet_row(
+            row_id, quantity='0', status='Error',
+            error_message='Walgreens API request timed out.'
+        )
     except requests.exceptions.RequestException as e:
         print(f"Request error calling Walgreens API: {e}")
         update_appsheet_row(
-            row_id,
-            quantity='0', # Send a default quantity
-            status='Error',
+            row_id, quantity='0', status='Error',
             error_message=f'Walgreens API Request Failed: {e}'
         )
     except Exception as e:
-        print(f"Unexpected error during Walgreens API call or processing: {e}")
+        # Catch-all for any other unexpected errors during the process
+        print(f"Unexpected error during inventory check: {e}")
+        import traceback
+        traceback.print_exc() # Print stack trace for detailed debugging
         update_appsheet_row(
-            row_id,
-            quantity='0', # Send a default quantity
-            status='Error',
+            row_id, quantity='0', status='Error',
             error_message=f'Internal App Error: {e}'
         )
 
-    return jsonify({"status": "success", "message": "Inventory check initiated and AppSheet update attempted."}), 200
+    # Always return a success response to the webhook sender if the request was processed
+    # (even if errors occurred during API calls), unless it was a bad request initially.
+    return jsonify({"status": "success", "message": "Inventory check processed; AppSheet update attempted."}), 200
+
 
 if __name__ == '__main__':
-    print("--- Running Flask development server locally ---")
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        print(".env file loaded.")
-    except ImportError:
-        print("python-dotenv not installed. Please set environment variables manually.")
-
-    required_vars = ["WALGREENS_API_KEY", "WALGREENS_AFFILIATE_ID", "APPSHEET_API_KEY", "APPSHEET_APP_ID", "APPSHEET_PRODUCT_TABLE_NAME"]
-    missing_vars = [var for var in required_vars if os.environ.get(var) is None]
-    if missing_vars:
-        print(f"Warning: Missing required environment variables for local testing: {', '.join(missing_vars)}")
-        print("Please set these in your shell or a .env file.")
-
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Use Gunicorn or Waitress in production instead of app.run()
+    # For RunPod, the Procfile or start command handles this.
+    # This block might only be used for very basic local testing if needed.
+    print("--- Starting Flask development server (for basic testing) ---")
+    # Bind to 0.0.0.0 to be accessible externally (within container/network)
+    # Port 5000 is common, adjust if needed.
+    # Turn debug OFF for production/stable environments
+    app.run(host='0.0.0.0', port=5000, debug=False)
