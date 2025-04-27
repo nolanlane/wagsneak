@@ -147,14 +147,16 @@ def check_inventory():
             app.logger.warning("Received empty or invalid JSON body")
             return jsonify({"status": "error", "message": "Invalid JSON"}), 400
 
-        # Use .get with default=None to safely access keys
-        row_id = webhook_data.get("appsheet_row_id")
-        product_id_18digit = webhook_data.get("product_id_18digit")
-        store_id = webhook_data.get("store_id")
-        app_version = webhook_data.get("app_version", "1.0") # Provide a default app version if needed
+        # Extract and sanitize incoming values
+        row_id_raw = webhook_data.get("appsheet_row_id")
+        product_id_raw = webhook_data.get("product_id_18digit")
+        store_id_raw = webhook_data.get("store_id")
+        app_version = webhook_data.get("app_version", "1.0")
 
-        # Convert product_id to string immediately for consistent comparisons
-        product_id_18digit_str = str(product_id_18digit) if product_id_18digit is not None else None
+        # Normalize to trimmed strings for consistent use
+        row_id = str(row_id_raw).strip() if row_id_raw is not None else None
+        product_id_18digit_str = str(product_id_raw).strip() if product_id_raw is not None else None
+        store_id = str(store_id_raw).strip() if store_id_raw is not None else None
 
         app.logger.debug(f"product_id received: {product_id_18digit!r} ({type(product_id_18digit)}), using '{product_id_18digit_str}'")
 
