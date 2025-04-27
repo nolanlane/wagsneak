@@ -7,7 +7,22 @@ from dotenv import load_dotenv
 
 app = Flask(__name__)
 
+# --- Configuration (Load from Environment Variables!) ---
+# These variables MUST be set in your RunPod environment.
+# DO NOT hardcode your API keys or sensitive info directly in this file!
+#
+# Required Environment Variables:
+# WALGREENS_API_KEY: Your Walgreens API Key
+# WALGREENS_AFFILIATE_ID: Your AffiliateID provided by Walgreens
+# APPSHEET_API_KEY: Your AppSheet Application Access Key
+# APPSHEET_APP_ID: Your AppSheet App ID (from its URL or Info tab)
+# APPSHEET_PRODUCT_TABLE_NAME: The exact name of your table in AppSheet
+# WEBHOOK_SECRET: (Optional) A secret string for webhook authentication
+
+# Load variables from .env file ONLY FOR LOCAL TESTING
+# On RunPod, these should be set in the environment directly.
 load_dotenv()
+
 
 WALGREENS_API_KEY = os.environ.get("WALGREENS_API_KEY")
 WALGREENS_AFFILIATE_ID = os.environ.get("WALGREENS_AFFILIATE_ID")
@@ -16,9 +31,21 @@ APPSHEET_APP_ID = os.environ.get("APPSHEET_APP_ID")
 APPSHEET_PRODUCT_TABLE_NAME = os.environ.get("APPSHEET_PRODUCT_TABLE_NAME")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
 
+# Use the Production URL
 APPSHEET_API_BASE_URL = f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}"
 
+
+# --- Helper Function to Update AppSheet ---
 def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
+    """
+    Updates a specific row in the AppSheet table via its API.
+
+    Args:
+        row_id (str): The unique key ('Row ID') of the row to update.
+        quantity (str, optional): The quantity to update. Defaults to None.
+        status (str, optional): The status to update. Defaults to None.
+        error_message (str, optional): The error message to update. Defaults to None.
+    """
     print(f"Attempting to update AppSheet row: {row_id} with Quantity='{quantity}', Status='{status}', Error='{error_message}'")
 
     appsheet_api_url = f"{APPSHEET_API_BASE_URL}/Action"
@@ -108,9 +135,9 @@ def check_inventory():
         store_id = webhook_data.get("store_id")
         app_version = webhook_data.get("app_version")
 
-        # --- DEBUG PRINT ---
-        print(f"DEBUG: product_id_18digit RECEIVED from webhook: '{product_id_18digit}', type: {type(product_id_18digit)}")
-        # --- END DEBUG PRINT ---
+        # --- DEBUG PRINT 1: Immediately after reading webhook data ---
+        print(f"DEBUG 1: product_id_18digit RECEIVED from webhook: '{product_id_18digit}', type: {type(product_id_18digit)}")
+        # --- END DEBUG PRINT 1 ---
 
 
         if not row_id or not product_id_18digit or not store_id:
@@ -153,10 +180,17 @@ def check_inventory():
             # Check if the response data is a list and contains inventory items
             if isinstance(walgreens_data, list):
                  print(f"Received inventory dump with {len(walgreens_data)} items.")
+
+                 # --- DEBUG PRINT 2: Before iterating through dump ---
+                 print(f"DEBUG 2: product_id_18digit before iterating dump: '{product_id_18digit}', type: {type(product_id_18digit)}")
+                 # --- END DEBUG PRINT 2 ---
+
                  for item in walgreens_data:
                       # Match item ID ('id') from the dump with the target product_id_18digit
                       # Ensure comparison is type safe (Walgreens might return numbers or strings for 'id')
-                      if str(item.get('id')) == str(product_id_18digit):
+                      # print(f"DEBUG: Comparing dump item '{item.get('id')}' to target '{product_id_18digit}'") # Optional detailed debug inside loop
+
+                      if str(item.get('id')) == str(product_id_18digit): # <-- Uses product_id_18digit here
                            print(f"Found item {product_id_18digit} in Walgreens inventory dump.")
                            found_item = True
                            # Extract quantity ('q') and potentially status from the item data
@@ -181,14 +215,19 @@ def check_inventory():
                            )
                            break # Exit loop once the target product is found
 
-            if not found_item:
-                 print(f"Target item {product_id_18digit} not found in Walgreens inventory dump.")
+            # --- DEBUG PRINT 3: Inside the "not found" block ---
+            if not found_item: # <-- This block is executed if item not found OR if product_id_18digit is truncated
+                 print(f"DEBUG 3: product_id_18digit inside not found block: '{product_id_18digit}', type: {type(product_id_18digit)}")
+                 # --- END DEBUG PRINT 3 ---
+
+                 print(f"Target item {product_id_18digit} not found in Walgreens inventory dump.") # <-- Uses product_id_18digit here
                  update_appsheet_row(
                       row_id,
                       quantity='0',
                       status='Not Found',
-                      error_message=f"Item {product_id_18digit} not in Walgreens dump."
+                      error_message=f"Item {product_id_18digit} not in Walgreens dump." # <-- Uses product_id_18digit here
                  )
+
             # If walgreens_data is not a list, it might be an error response from Walgreens structured differently
             elif isinstance(walgreens_data, dict) and 'error' in walgreens_data:
                  print(f"Walgreens API returned an error in the response body: {walgreens_data.get('error')}")
