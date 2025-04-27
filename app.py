@@ -42,11 +42,34 @@ APPSHEET_API_BASE_URL = (
     f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}"
     if APPSHEET_APP_ID and APPSHEET_PRODUCT_TABLE_NAME else None
 )
-# Warn about key-column configuration if not explicitly set
-if "APPSHEET_KEY_COLUMN_NAME" not in os.environ:
+# --- Auto-detect AppSheet key column via API if not explicitly configured ---
+if APPSHEET_API_BASE_URL and APPSHEET_API_KEY and "APPSHEET_KEY_COLUMN_NAME" not in os.environ:
+    try:
+        cols_url = f"{APPSHEET_API_BASE_URL}/Columns"
+        headers = {"Content-Type": "application/json", "ApplicationAccessKey": APPSHEET_API_KEY}
+        payload = {"Action": "Get", "Properties": {}, "Rows": []}
+        app.logger.info(f"Retrieving AppSheet columns metadata from {cols_url}")
+        resp = requests.post(cols_url, headers=headers, json=payload, timeout=30)
+        app.logger.info(f"AppSheet columns metadata HTTP status: {resp.status_code}")
+        if resp.ok:
+            data = resp.json()
+            cols_list = data.get("Columns") if isinstance(data, dict) and "Columns" in data else data
+            # Log available column names for debugging
+            col_names = [c.get("Name") for c in cols_list if isinstance(c, dict)]
+            app.logger.info(f"AppSheet columns: {col_names}")
+            for col in cols_list:
+                if col.get("Key") or col.get("IsKey"):
+                    APPSHEET_KEY_COLUMN_NAME = col.get("Name")
+                    app.logger.info(f"Detected AppSheet key column: {APPSHEET_KEY_COLUMN_NAME}")
+                    break
+        else:
+            app.logger.warning(f"Could not fetch AppSheet columns metadata: HTTP {resp.status_code}")
+    except Exception:
+        app.logger.exception("Failed to auto-detect AppSheet key column")
+else:
     app.logger.warning(
-        f"Using default AppSheet key column '{APPSHEET_KEY_COLUMN_NAME}'. "
-        "If your table uses a different key column name, set the APPSHEET_KEY_COLUMN_NAME environment variable accordingly."
+        f"Using AppSheet key column '{APPSHEET_KEY_COLUMN_NAME}'. "
+        "Set APPSHEET_KEY_COLUMN_NAME env var to override."
     )
 
 
