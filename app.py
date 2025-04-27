@@ -42,28 +42,12 @@ APPSHEET_API_BASE_URL = (
     f"https://api.appsheet.com/api/v2/apps/{APPSHEET_APP_ID}/tables/{APPSHEET_PRODUCT_TABLE_NAME}"
     if APPSHEET_APP_ID and APPSHEET_PRODUCT_TABLE_NAME else None
 )
-# --- Auto-detect key column name if not explicitly configured ---
-# Requires AppSheet API URL & Key, and that user did not set APPSHEET_KEY_COLUMN_NAME explicitly
-if APPSHEET_API_BASE_URL and APPSHEET_API_KEY and "APPSHEET_KEY_COLUMN_NAME" not in os.environ:
-    try:
-        cols_url = f"{APPSHEET_API_BASE_URL}/Columns"
-        app.logger.info(f"Retrieving AppSheet columns metadata to detect key column from {cols_url}")
-        resp = requests.get(cols_url, headers={"ApplicationAccessKey": APPSHEET_API_KEY}, timeout=30)
-        if resp.ok:
-            cols = resp.json()
-            # Log available column names for debugging
-            col_names = [c.get("Name") for c in cols if isinstance(c, dict) and c.get("Name")]
-            app.logger.info(f"AppSheet columns: {col_names}")
-            # Detect the key column by flag
-            for col in cols:
-                if col.get("Key") or col.get("IsKey"):
-                    APPSHEET_KEY_COLUMN_NAME = col.get("Name")
-                    app.logger.info(f"Detected AppSheet key column: {APPSHEET_KEY_COLUMN_NAME}")
-                    break
-        else:
-            app.logger.warning(f"Could not fetch AppSheet columns metadata: HTTP {resp.status_code}")
-    except Exception:
-        app.logger.exception("Failed to auto-detect AppSheet key column")
+# Warn about key-column configuration if not explicitly set
+if "APPSHEET_KEY_COLUMN_NAME" not in os.environ:
+    app.logger.warning(
+        f"Using default AppSheet key column '{APPSHEET_KEY_COLUMN_NAME}'. "
+        "If your table uses a different key column name, set the APPSHEET_KEY_COLUMN_NAME environment variable accordingly."
+    )
 
 
 # --- Helper Function to Update AppSheet ---
