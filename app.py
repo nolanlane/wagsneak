@@ -5,6 +5,7 @@ import sys
 import hmac
 import json
 import logging
+import time
 
 app = Flask(__name__)
 # Configure logging
@@ -73,6 +74,25 @@ else:
     )
 
 
+# --- Inventory cache (per-store) to minimize repeated Walgreens API calls ---
+# --- Inventory cache (per-store) to minimize repeated Walgreens API calls ---
+INVENTORY_CACHE = {}  # store_id -> {'timestamp': float, 'data': list}
+CACHE_TTL = 10 * 60   # cache time-to-live in seconds (10 minutes)
+ 
+# Helper to prune expired cache entries
+def prune_cache():
+    """
+    Remove expired entries from INVENTORY_CACHE.
+    """
+    try:
+        now = time.time()
+        expired = [store for store, entry in INVENTORY_CACHE.items() if now - entry['timestamp'] >= CACHE_TTL]
+        for store in expired:
+            del INVENTORY_CACHE[store]
+            app.logger.info(f"Pruned cached inventory for store {store}")
+    except Exception as e:
+        app.logger.warning(f"Error pruning cache: {e}")
+#
 # --- Helper Function to Update AppSheet ---
 def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
     """
@@ -240,6 +260,35 @@ def check_inventory():
         )
         return jsonify({"status": "error", "message": "Walgreens API credentials not configured"}), 500
 
+    # --- Cached inventory lookup (per-store) ---
+    # Remove expired cache entries before lookup
+    prune_cache()
+    now = time.time()
+    cache_entry = INVENTORY_CACHE.get(store_id)
+    if cache_entry and now - cache_entry["timestamp"] < CACHE_TTL:
+        app.logger.info(f"Using cached Walgreens inventory for store {store_id} (age {now - cache_entry['timestamp']:.0f}s)")
+        # Use the pre-built inventory_map for fast lookups
+        inventory_map = cache_entry.get("inventory_map", {})
+        q = inventory_map.get(product_id_18digit_str)
+        if q is not None:
+            try:
+                if int(q) > 0:
+                    status_str = 'In Stock'
+                    qty_str = str(q)
+                else:
+                    status_str = 'Out of Stock'
+                    qty_str = '0'
+            except (ValueError, TypeError):
+                app.logger.warning(f"Could not parse quantity {q!r} for item {product_id_18digit_str}")
+                status_str = 'Unknown Qty'
+                qty_str = str(q)
+            update_appsheet_row(row_id, quantity=qty_str, status=status_str, error_message=None)
+        else:
+            msg = f"Item {product_id_18digit_str} not in dump."
+            app.logger.info(msg)
+            update_appsheet_row(row_id, quantity='0', status='Not Found', error_message=msg)
+        return jsonify({"status": "success", "message": "Inventory check processed; AppSheet update attempted."}), 200
+
     # --- Call Walgreens API - Method B (Get full inventory dump, then filter) ---
     walgreens_api_url = "https://services.walgreens.com/api/products/inventory/v4"
 
@@ -264,20 +313,70 @@ def check_inventory():
         if walgreens_response.status_code == 200:
             try:
                 walgreens_data = walgreens_response.json()
-                # --- Process Walgreens Response - Filter the dump ---
-                quantity_for_appsheet = '0'
-                inventory_for_appsheet = 'Not Found' # Default status if item not in dump
-                error_for_appsheet = None
-                found_item = False
-
+                # Build an index mapping product_id -> quantity for fast lookups
+                inventory_map = {str(item.get('id')): item.get('q') for item in walgreens_data} if isinstance(walgreens_data, list) else {}
+                # Cache this inventory map for 10 minutes
+                try:
+                    INVENTORY_CACHE[store_id] = {"timestamp": time.time(), "inventory_map": inventory_map}
+                    app.logger.info(f"Cached Walgreens inventory for store {store_id} with {len(inventory_map)} items")
+                except Exception as cache_err:
+                    app.logger.warning(f"Failed to cache Walgreens inventory: {cache_err}")
+                # Lookup specific product and update
+                q = inventory_map.get(product_id_18digit_str)
+                if q is not None:
+                    try:
+                        if int(q) > 0:
+                            status_str = 'In Stock'
+                            qty_str = str(q)
+                        else:
+                            status_str = 'Out of Stock'
+                            qty_str = '0'
+                    except (ValueError, TypeError):
+                        app.logger.warning(f"Could not parse quantity {q!r} for item {product_id_18digit_str}")
+                        status_str = 'Unknown Qty'
+                        qty_str = str(q)
+                    update_appsheet_row(row_id, quantity=qty_str, status=status_str, error_message=None)
+                else:
+                    msg = f"Item {product_id_18digit_str} not in dump."
+                    app.logger.info(msg)
+                    update_appsheet_row(row_id, quantity='0', status='Not Found', error_message=msg)
+                return jsonify({"status": "success", "message": "Inventory check processed; AppSheet update attempted."}), 200
+                # --- Legacy linear-scan block (retained for reference; not executed) ---
+                """
+                # Build an index mapping product_id -> quantity for fast lookups
+                inventory_map = {}
                 if isinstance(walgreens_data, list):
-                     app.logger.info(f"Received inventory dump with {len(walgreens_data)} items.")
-                     for item in walgreens_data:
-                          # Compare item ID from dump (as string) with target product ID (already string)
-                          if str(item.get('id')) == product_id_18digit_str:
-                               app.logger.info(f"Found item {product_id_18digit_str} in Walgreens inventory dump.")
-                               found_item = True
-                               quantity_available = item.get('q') # Extract quantity ('q')
+                    for item in walgreens_data:
+                        key = str(item.get('id'))
+                        inventory_map[key] = item.get('q')
+                # Cache this inventory map for 10 minutes
+                try:
+                    INVENTORY_CACHE[store_id] = {"timestamp": time.time(), "inventory_map": inventory_map}
+                    app.logger.info(f"Cached Walgreens inventory for store {store_id} with {len(inventory_map)} items")
+                except Exception as cache_err:
+                    app.logger.warning(f"Failed to cache Walgreens inventory: {cache_err}")
+                # --- Process Walgreens Response using the index ---
+                quantity_for_appsheet = '0'
+                inventory_for_appsheet = 'Not Found'
+                found_item = False
+                if product_id_18digit_str in inventory_map:
+                    found_item = True
+                    q = inventory_map[product_id_18digit_str]
+                    if q is not None:
+                        try:
+                            if int(q) > 0:
+                                inventory_for_appsheet = 'In Stock'
+                                quantity_for_appsheet = str(q)
+                            else:
+                                inventory_for_appsheet = 'Out of Stock'
+                                quantity_for_appsheet = '0'
+                        except (ValueError, TypeError):
+                            app.logger.warning(f"Could not parse quantity {q!r} for item {product_id_18digit_str}")
+                            inventory_for_appsheet = 'Unknown Qty'
+                            quantity_for_appsheet = str(q)
+                    else:
+                        inventory_for_appsheet = 'Out of Stock'
+                        quantity_for_appsheet = '0'
 
                                # Determine status and quantity string for AppSheet
                                if quantity_available is not None:
@@ -315,8 +414,9 @@ def check_inventory():
                               error_message=f"Item {product_id_18digit_str} not in dump."
                          )
 
-                # Handle cases where Walgreens API returns non-list data (e.g., error object)
-                elif isinstance(walgreens_data, dict) and 'error' in walgreens_data:
+                """
+                # Handle cases where Walgreens API returns an error object or unexpected format
+                if isinstance(walgreens_data, dict) and 'error' in walgreens_data:
                      error_detail = walgreens_data.get('error', 'Unknown Walgreens error')
                      app.logger.error(f"Walgreens API returned an error object: {error_detail}")
                      update_appsheet_row(
@@ -385,7 +485,29 @@ def check_inventory():
 
 
 if __name__ == '__main__':
-    # Development-only server; in production use Gunicorn or similar
-    app.logger.info("Starting Flask development server on 0.0.0.0")
+    """
+    Entry point for running the server.
+    On Windows, use Waitress if available; on other OS, attempt to exec Gunicorn.
+    Falls back to Flask's development server if the preferred WSGI server is not found.
+    """
+    import platform
+    host = '0.0.0.0'
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    system = platform.system()
+    if system == 'Windows':
+        try:
+            from waitress import serve
+            app.logger.info(f"Detected Windows OS. Starting Waitress on {host}:{port}")
+            serve(app, host=host, port=port)
+        except ImportError:
+            app.logger.warning("Waitress not installed. Falling back to Flask development server.")
+            app.run(host=host, port=port, debug=False)
+    else:
+        # On Linux/Unix, try to launch via Gunicorn
+        gunicorn_cmd = ["gunicorn", "app:app", "-b", f"{host}:{port}"]
+        app.logger.info(f"Detected {system}. Starting Gunicorn: {' '.join(gunicorn_cmd)}")
+        try:
+            os.execvp("gunicorn", gunicorn_cmd)
+        except OSError:
+            app.logger.warning("Gunicorn not found. Falling back to Flask development server.")
+            app.run(host=host, port=port, debug=False)
