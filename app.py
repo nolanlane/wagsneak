@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 # Configure logging
@@ -79,6 +80,9 @@ else:
 INVENTORY_CACHE = {}  # store_id -> {'timestamp': float, 'data': list}
 CACHE_TTL = 10 * 60   # cache time-to-live in seconds (10 minutes)
  
+# Executor for asynchronous AppSheet updates
+_APPSHEET_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+ 
 # Helper to prune expired cache entries
 def prune_cache():
     """
@@ -109,88 +113,42 @@ def update_appsheet_row(row_id, quantity=None, status=None, error_message=None):
         app.logger.error("AppSheet API URL or Key not configured. Skipping update.")
         return
 
-    app.logger.info(f"Updating AppSheet row {row_id}: Quantity={quantity!r}, Status={status!r}, Error={error_message!r}")
-
-    appsheet_api_url = f"{APPSHEET_API_BASE_URL}/Rows" # Use the /Rows endpoint
-
-    headers = {
-        "Content-Type": "application/json",
-        "ApplicationAccessKey": APPSHEET_API_KEY
-    }
-
-    # Construct the row data with the key column first
-    row_data_to_update = {
-        APPSHEET_KEY_COLUMN_NAME: row_id
-    }
-
-    # Add other columns to update, converting None to appropriate defaults
-    if quantity is not None:
-        # Ensure quantity is a string; default empty/None to '0'
-        row_data_to_update["Quantity"] = str(quantity) if str(quantity) else '0'
-    else:
-        row_data_to_update["Quantity"] = '0' # Default if None
-
-    if status is not None:
-        row_data_to_update["Status"] = str(status)
-    else:
-        row_data_to_update["Status"] = '' # Default to empty string if None
-
+    # Prepare REST call data
+    appsheet_api_url = f"{APPSHEET_API_BASE_URL}/Rows"
+    headers = {"Content-Type": "application/json", "ApplicationAccessKey": APPSHEET_API_KEY}
+    # Build row payload
+    row_data_to_update = {APPSHEET_KEY_COLUMN_NAME: row_id}
+    row_data_to_update["Quantity"] = str(quantity) if quantity is not None else '0'
+    row_data_to_update["Status"] = str(status) if status is not None else ''
     if error_message is not None:
-        # Limit error message length if necessary for AppSheet column
-        error_str = str(error_message)
-        max_len = 250 # Example max length, adjust if needed
-        row_data_to_update["Error"] = error_str[:max_len] if len(error_str) > max_len else error_str
+        err = str(error_message)
+        row_data_to_update["Error"] = err[:250] if len(err) > 250 else err
     else:
-        row_data_to_update["Error"] = '' # Default to empty string if None
+        row_data_to_update["Error"] = ''
+    appsheet_payload = {"Action": "Edit", "Properties": {"Locale": "en-US"}, "Rows": [row_data_to_update]}
 
-    # Construct the final payload for the /Rows "Edit" action
-    appsheet_payload = {
-        "Action": "Edit",
-        "Properties": {
-            "Locale": "en-US", # Example: Specify locale if needed
-            # "Timezone": "America/New_York", # Example: Specify timezone if needed
-        },
-        "Rows": [row_data_to_update] # Pass the row data in a list under "Rows"
-    }
+    def _send_update():
+        try:
+            app.logger.info(f"Updating AppSheet row {row_id}: Quantity={quantity!r}, Status={status!r}, Error={error_message!r}")
+            app.logger.debug(f"Calling AppSheet API at {appsheet_api_url}")
+            resp = requests.post(appsheet_api_url, headers=headers, json=appsheet_payload, timeout=30)
+            app.logger.info(f"AppSheet API status: {resp.status_code}")
+            if 200 <= resp.status_code < 300:
+                app.logger.info(f"AppSheet update queued for row {row_id}")
+            elif resp.status_code == 404:
+                app.logger.error(f"AppSheet row not found (404): key '{APPSHEET_KEY_COLUMN_NAME}'='{row_id}'")
+                app.logger.error(f"Response body: {resp.text}")
+            else:
+                app.logger.error(f"AppSheet error {resp.status_code}: {resp.reason}")
+                app.logger.error(f"Body: {resp.text}")
+        except requests.exceptions.Timeout:
+            app.logger.error(f"Timeout when updating AppSheet row {row_id}")
+        except requests.exceptions.RequestException as e:
+            app.logger.error(f"RequestException updating AppSheet row {row_id}: {e}")
+        except Exception:
+            app.logger.exception(f"Unexpected error in AppSheet update for row {row_id}")
 
-    try:
-        app.logger.debug(f"Calling AppSheet API (Edit Row) at {appsheet_api_url}")
-        # print(f"AppSheet API Request Body: {json.dumps(appsheet_payload)}") # Uncomment to debug payload
-
-        appsheet_response = requests.post( # POST method is correct for /Rows endpoint actions
-            appsheet_api_url,
-            headers=headers,
-            json=appsheet_payload,
-            timeout=30 # Add a timeout to prevent hanging indefinitely
-        )
-
-        app.logger.info(f"AppSheet API status: {appsheet_response.status_code}")
-
-        if 200 <= appsheet_response.status_code < 300:
-            app.logger.info(f"AppSheet update initiated for row {row_id}")
-        elif appsheet_response.status_code == 404:
-            app.logger.error(
-                f"AppSheet row not found (404). Ensure key column '{APPSHEET_KEY_COLUMN_NAME}' has value '{row_id}' in the table."
-            )
-            try:
-                app.logger.error(f"AppSheet API error body: {appsheet_response.text}")
-            except Exception as e:
-                app.logger.error(f"Could not read AppSheet error response body: {e}")
-        else:
-            app.logger.error(
-                f"AppSheet API error for row {row_id}: {appsheet_response.status_code} {appsheet_response.reason}"
-            )
-            try:
-                app.logger.error(f"AppSheet API error body: {appsheet_response.text}")
-            except Exception as e:
-                app.logger.error(f"Could not read AppSheet error response body: {e}")
-
-    except requests.exceptions.Timeout:
-        app.logger.error(f"Timeout calling AppSheet API for row {row_id}")
-    except requests.exceptions.RequestException as e:
-        app.logger.error(f"AppSheet request exception for row {row_id}: {e}")
-    except Exception:
-        app.logger.exception(f"Unexpected error updating AppSheet row {row_id}")
+    _APPSHEET_EXECUTOR.submit(_send_update)
 
 
 @app.route('/check_walgreens_inventory', methods=['POST'])
