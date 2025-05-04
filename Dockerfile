@@ -23,4 +23,5 @@ EXPOSE 5000
 
 # Define default PORT and startup command for Cloud Run to launch the service.
 ENV PORT 5000
-CMD exec gunicorn app:app --bind 0.0.0.0:$PORT
+# Increase Gunicorn worker timeout above the default 30s so long inventory pulls can complete
+CMD exec gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
