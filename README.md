@@ -51,7 +51,12 @@ Set these environment variables before running:
    ```
 4. Start the server with Gunicorn (recommended):
    ```bash
-   gunicorn app:app -b 0.0.0.0:${PORT:-5000}
+   gunicorn app:app \
+       --worker-class gthread \
+       --workers 1 \
+       --threads 4 \
+       -b 0.0.0.0:${PORT:-5000} \
+       --timeout 120
    ```
 
 ## Quickstart (Windows)
