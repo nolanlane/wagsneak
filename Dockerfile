@@ -21,6 +21,6 @@ COPY app.py .
 # Expose the port your application will listen on (matches Flask's default port).
 EXPOSE 5000
 
-# No CMD or ENTRYPOINT needed here, as the RunPod UI's "Container Start Command" overrides this.
-# Including CMD ["true"] or similar is sometimes done to make the Dockerfile technically executable,
-# but for this RunPod setup, it's not strictly necessary.
+# Define default PORT and startup command for Cloud Run to launch the service.
+ENV PORT 5000
+CMD exec gunicorn app:app --bind 0.0.0.0:$PORT
